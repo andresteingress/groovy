@@ -25,6 +25,7 @@ import groovy.transform.Canonical
 /**
  * @author Guillaume Laforge
  * @author Andrey Bloschetsov
+ * @author Andre Steingress
  */
 class JsonOutputTest extends GroovyTestCase {
 
@@ -179,7 +180,8 @@ class JsonOutputTest extends GroovyTestCase {
 
     void testURL() {
         assert toJson(new URL("http://glaforge.appspot.com")) == '"http://glaforge.appspot.com"'
-        assert toJson(new URL('file', '', 'C:\\this\\is\\windows\\path')) == '"file:C:\\\\this\\\\is\\\\windows\\\\path"' // GROOVY-6560
+        assert toJson(new URL('file', '', 'C:\\this\\is\\windows\\path')) == '"file:C:\\\\this\\\\is\\\\windows\\\\path"'
+        // GROOVY-6560
     }
 
     void testCalendar() {
@@ -220,7 +222,7 @@ class JsonOutputTest extends GroovyTestCase {
         def json = new JsonBuilder()
 
         json.trends {
-            "2010-06-22 17:20" ([
+            "2010-06-22 17:20"([
                     name: "Groovy rules",
                     query: "Groovy rules"
             ], {
@@ -230,7 +232,7 @@ class JsonOutputTest extends GroovyTestCase {
                     name: "Uruguai",
                     query: "Uruguai"
             ])
-            "2010-06-22 06:20" ({
+            "2010-06-22 06:20"({
                 name "#groovy"
                 query "#groovy"
             }, [
@@ -405,19 +407,19 @@ class JsonOutputTest extends GroovyTestCase {
         assert toJson(new Expando('\u0002': 0)) == '{"\\u0002":0}'
 
         // Closure
-        assert toJson({'"' 0}) == '{"\\"":0}'
-        assert toJson({'\b' 0}) == '{"\\b":0}'
-        assert toJson({'\f' 0}) == '{"\\f":0}'
-        assert toJson({'\n' 0}) == '{"\\n":0}'
-        assert toJson({'\r' 0}) == '{"\\r":0}'
-        assert toJson({'\t' 0}) == '{"\\t":0}'
-        assert toJson({'\\' 0}) == '{"\\\\":0}'
-        assert toJson({'\1' 0}) == '{"\\u0001":0}'
-        assert toJson({'\u0002' 0}) == '{"\\u0002":0}'
+        assert toJson({ '"' 0 }) == '{"\\"":0}'
+        assert toJson({ '\b' 0 }) == '{"\\b":0}'
+        assert toJson({ '\f' 0 }) == '{"\\f":0}'
+        assert toJson({ '\n' 0 }) == '{"\\n":0}'
+        assert toJson({ '\r' 0 }) == '{"\\r":0}'
+        assert toJson({ '\t' 0 }) == '{"\\t":0}'
+        assert toJson({ '\\' 0 }) == '{"\\\\":0}'
+        assert toJson({ '\1' 0 }) == '{"\\u0001":0}'
+        assert toJson({ '\u0002' 0 }) == '{"\\u0002":0}'
     }
 
     void testFile() {
-        def file  = File.createTempFile('test', 'file-json')
+        def file = File.createTempFile('test', 'file-json')
         file.deleteOnExit()
         assert toJson(file)
 
@@ -426,6 +428,56 @@ class JsonOutputTest extends GroovyTestCase {
         assert toJson(dir)
     }
 
+    void testPropertyExclusionsWithConcreteClass() {
+        def text = toJson(new Foo('test'), [excludes: [Foo: 'default']]) // can be a list of properties or a single property String
+        assert text == '{"name":"test"}'
+    }
+
+    void testPropertyExclusionsWithExpando() {
+        assert toJson(new Expando(a: 42, b: 43), [excludes: 'a']) == '{"b":43}'
+    }
+
+    void testPropertyExclusionsForObjectsInMaps() {
+        assert toJson([42: new Expando(b: 43, c: 44)], [excludes: [Expando: 'c']]) == '{"42":{"b":43}}'
+    }
+
+    void testCategoryJsonOutputUsage() {
+        use (JsonOutput) {
+            assert new Foo('test').toJson(excludes: 'default') == '{"name":"test"}'
+        }
+    }
+
+    void testToJsonWithPropertyExcludes() {
+        assert toJson([new Foo('test1'), new Foo('test2')], [excludes: 'default']) == '[{"name":"test1"},{"name":"test2"}]'
+    }
+
+    void testToJsonWithPropertyIncludes() {
+        assert toJson([new Foo('test1'), new Foo('test2')], [includes: 'name']) == '[{"name":"test1"},{"name":"test2"}]'
+    }
+
+    void testToJsonWithClassPropertyExcludes() {
+        assert toJson([new Foo('test1'), new Foo('test2')] as Foo[], [excludes: 'default']) == '[{"name":"test1"},{"name":"test2"}]'
+    }
+
+    void testToJsonWithClassPropertyIncludes() {
+        assert toJson([new Foo('test1'), new Foo('test2')] as Foo[], [includes: 'name']) == '[{"name":"test1"},{"name":"test2"}]'
+    }
+
+    void testToJsonMapWithPropertyExcludes() {
+        assert toJson([key1: new Foo('test1'), key2: new Foo('test2')], [excludes: 'default']) == '{"key1":{"name":"test1"},"key2":{"name":"test2"}}'
+    }
+
+    void testToJsonMapWithPropertyIncludes() {
+        assert toJson([key1: new Foo('test1'), key2: new Foo('test2')], [includes: 'name']) == '{"key1":{"name":"test1"},"key2":{"name":"test2"}}'
+    }
+
+    void testToJsonIteratorWithPropertyExcludes() {
+        assert toJson([new Foo('test1'), new Foo('test2')].iterator(), [excludes: 'default']) == '[{"name":"test1"},{"name":"test2"}]'
+    }
+
+    void testToJsonIteratorWithPropertyIncludes() {
+        assert toJson([new Foo('test1'), new Foo('test2')].iterator(), [includes: 'name']) == '[{"name":"test1"},{"name":"test2"}]'
+    }
 }
 
 @Canonical
@@ -458,4 +510,12 @@ class JsonFoo {
 
 enum JsonStreetKind {
     street, boulevard, avenue
+}
+
+class Foo {
+    private static final DEFAULT = new Foo('The Foo')
+    private final String name
+    Foo(String name) { this.name = name }
+    String getName() { return name }
+    static Foo getDefault() { return DEFAULT }
 }
