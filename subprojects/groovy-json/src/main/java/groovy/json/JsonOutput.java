@@ -170,12 +170,20 @@ public class JsonOutput {
      * @return an object representation of a closure
      */
     public static String toJson(Closure closure) {
+        return toJson(closure, Integer.MAX_VALUE);
+    }
+
+    /**
+     * @return an object representation of a closure. <tt>maxDepth</tt> might be used to limit the depth of the resulting
+     * JSON map.
+     */
+    public static String toJson(Closure closure, int maxDepth) {
         if (closure == null) {
             return NULL_VALUE;
         }
 
         CharBuf buffer = CharBuf.create(255);
-        writeMap(JsonDelegate.cloneDelegateAndGetContent(closure), buffer);
+        writeMap(JsonDelegate.cloneDelegateAndGetContent(closure), buffer, 0, maxDepth);
 
         return buffer.toString();
     }
@@ -184,12 +192,32 @@ public class JsonOutput {
      * @return an object representation of an Expando
      */
     public static String toJson(Expando expando) {
+        return toJson(expando, Integer.MAX_VALUE);
+    }
+
+    /**
+     * @return an object representation of an Expando. <tt>maxDepth</tt> might be used to limit the depth of the resulting
+     * JSON map.
+     */
+    public static String toJson(Expando expando, int maxDepth) {
         if (expando == null) {
             return NULL_VALUE;
         }
 
         CharBuf buffer = CharBuf.create(255);
-        writeMap(expando.getProperties(), buffer);
+        writeMap(expando.getProperties(), buffer, 0, maxDepth);
+
+        return buffer.toString();
+    }
+
+    /**
+     * @return "null" for a null value, or a JSON array representation for a collection, array, iterator or enumeration,
+     * or representation for other object. <tt>maxDepth</tt> might be used to limit the depth of the resulting
+     * JSON map.
+     */
+    public static String toJson(Object object, int maxDepth) {
+        CharBuf buffer = CharBuf.create(255);
+        writeObject(object, buffer, 0, maxDepth); // checking null inside
 
         return buffer.toString();
     }
@@ -199,22 +227,27 @@ public class JsonOutput {
      * or representation for other object.
      */
     public static String toJson(Object object) {
-        CharBuf buffer = CharBuf.create(255);
-        writeObject(object, buffer); // checking null inside
-
-        return buffer.toString();
+        return toJson(object, Integer.MAX_VALUE);
     }
 
     /**
      * @return a JSON object representation for a map
      */
     public static String toJson(Map m) {
+        return toJson(m, Integer.MAX_VALUE);
+    }
+
+    /**
+     * @return a JSON object representation for a map. <tt>maxDepth</tt> might be used to limit the depth of the resulting
+     * JSON map.
+     */
+    public static String toJson(Map m, int maxDepth) {
         if (m == null) {
             return NULL_VALUE;
         }
 
         CharBuf buffer = CharBuf.create(255);
-        writeMap(m, buffer);
+        writeMap(m, buffer, 0, maxDepth);
 
         return buffer.toString();
     }
@@ -260,10 +293,14 @@ public class JsonOutput {
         }
     }
 
+    private static void writeObject(Object object, CharBuf buffer) {
+        writeObject(object, buffer, 0, Integer.MAX_VALUE);
+    }
+
     /**
      * Serializes object and writes it into specified buffer.
      */
-    private static void writeObject(Object object, CharBuf buffer) {
+    private static void writeObject(Object object, CharBuf buffer, int level, int maxDepth) {
         if (object == null) {
             buffer.addNull();
         } else {
@@ -280,7 +317,7 @@ public class JsonOutput {
             } else if (Calendar.class.isAssignableFrom(objectClass)) {
                 writeDate(((Calendar) object).getTime(), buffer);
             } else if (Map.class.isAssignableFrom(objectClass)) {
-                writeMap((Map) object, buffer);
+                writeMap((Map) object, buffer, level, maxDepth);
             } else if (Iterable.class.isAssignableFrom(objectClass)) {
                 writeIterator(((Iterable<?>) object).iterator(), buffer);
             } else if (Iterator.class.isAssignableFrom(objectClass)) {
@@ -294,9 +331,9 @@ public class JsonOutput {
             } else if (objectClass == JsonUnescaped.class) {
                 buffer.add(object.toString());
             } else if (Closure.class.isAssignableFrom(objectClass)) {
-                writeMap(JsonDelegate.cloneDelegateAndGetContent((Closure<?>) object), buffer);
+                writeMap(JsonDelegate.cloneDelegateAndGetContent((Closure<?>) object), buffer, level, maxDepth);
             } else if (Expando.class.isAssignableFrom(objectClass)) {
-                writeMap(((Expando) object).getProperties(), buffer);
+                writeMap(((Expando) object).getProperties(), buffer, level, maxDepth);
             } else if (Enumeration.class.isAssignableFrom(objectClass)) {
                 List<?> list = Collections.list((Enumeration<?>) object);
                 writeIterator(list.iterator(), buffer);
@@ -315,10 +352,10 @@ public class JsonOutput {
                     }
                 }
 
-                writeMap(properties, buffer);
+                writeMap(properties, buffer, level, maxDepth);
             } else {
                 Map<?, ?> properties = getObjectProperties(object);
-                writeMap(properties, buffer);
+                writeMap(properties, buffer, level, maxDepth);
             }
         }
     }
@@ -439,8 +476,10 @@ public class JsonOutput {
     /**
      * Serializes map and writes it into specified buffer.
      */
-    private static void writeMap(Map<?, ?> map, CharBuf buffer) {
+    private static void writeMap(Map<?, ?> map, CharBuf buffer, int level, int maxDepth) {
         if (!map.isEmpty()) {
+            if (level == maxDepth) return;
+
             buffer.addChar(OPEN_BRACE);
             boolean firstItem = true;
             for (Map.Entry<?, ?> entry : map.entrySet()) {
@@ -455,7 +494,7 @@ public class JsonOutput {
                 }
 
                 buffer.addJsonFieldName(entry.getKey().toString());
-                writeObject(entry.getValue(), buffer);
+                writeObject(entry.getValue(), buffer, ++level, maxDepth);
             }
             buffer.addChar(CLOSE_BRACE);
         } else {

@@ -426,6 +426,10 @@ class JsonOutputTest extends GroovyTestCase {
         assert toJson(dir)
     }
 
+    void testMaxDepth() {
+        def text = toJson(new Foo('test'), 2)
+        assert text == '{"default":{"default":,"name":"The Foo"},"name":"test"}'
+    }
 }
 
 @Canonical
@@ -458,4 +462,12 @@ class JsonFoo {
 
 enum JsonStreetKind {
     street, boulevard, avenue
+}
+
+class Foo {
+    private static final DEFAULT = new Foo('The Foo')
+    private final String name
+    Foo(String name) { this.name = name }
+    String getName() { return name }
+    static Foo getDefault() { return DEFAULT }
 }
