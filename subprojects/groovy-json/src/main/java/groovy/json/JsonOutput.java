@@ -20,6 +20,7 @@ package groovy.json;
 
 import groovy.json.internal.CharBuf;
 import groovy.json.internal.Chr;
+import groovy.json.internal.JsonOutputConfiguration;
 import groovy.lang.Closure;
 import groovy.util.Expando;
 import org.codehaus.groovy.runtime.DefaultGroovyMethods;
@@ -32,15 +33,48 @@ import java.net.URL;
 import java.text.SimpleDateFormat;
 import java.util.*;
 
+import static groovy.json.internal.JsonOutputConfiguration.newConfiguration;
+
 /**
  * Class responsible for the actual String serialization of the possible values of a JSON structure.
- * This class can also be used as a category, so as to add <code>toJson()</code> methods to various types.
+ * This class can also be used as a category, so as to add {@code toJson()} methods to various types.
+ *
+ * The {@code toJson()} methods for {@code Object}, {@code Expando} and {@code Map} have an
+ * overloaded method that allows to specify a <i>JsonOutput configuration</i> as a plain Groovy map for the second
+ * argument.
+ *
+ * As of now, the configuration map supports the {@code excludes} and {@code includes} map keys that may specify
+ * one or more classes and/or properties for exclusion/inclusion during JSON rendering:
+ *
+ * <pre>
+ *     <code>
+ *     toJson(new Foo(), [excludes: 'property1, property2'])
+ *     </code>
+ * </pre>
+ *
+ * The resulting JSON string won't contain the properties {@code property1} and {@code property2}. Besides excluding
+ * properties globally, it is supported to exclude properties per class name:
+ *
+ * <pre>
+ *     <code>
+ *     toJson(new ObjectGraph(), [excludes: [Foo: 'property1,property2']])
+ *     </code>
+ * </pre>
+ *
+ * Which allows to define property exclusions per class which is particularly useful when rendering object trees.
+ * Note that the class name in the above example is of type {@link String}. As of now, JsonOutput only supports simple
+ * class names, support for fully-qualified class names is not yet implemented.
+ *
+ * The {@code excludes:} and {@code includes:} configuration map entries are both exclusive. If inclusion is applied,
+ * on the specified properties will be included, if excelsion is applied, all properties will be included except the
+ * excluded ones.
  *
  * @author Guillaume Laforge
  * @author Roshan Dawrani
  * @author Andrey Bloschetsov
  * @author Rick Hightower
  * @author Graeme Rocher
+ * @author Andre Steingress
  *
  * @since 1.8.0
  */
@@ -67,7 +101,7 @@ public class JsonOutput {
      */
     public static String toJson(Boolean bool) {
         CharBuf buffer = CharBuf.create(4);
-        writeObject(bool, buffer); // checking null inside
+        writeObject(bool, buffer, newConfiguration()); // checking null inside
 
         return buffer.toString();
     }
@@ -93,7 +127,7 @@ public class JsonOutput {
      */
     public static String toJson(Character c) {
         CharBuf buffer = CharBuf.create(3);
-        writeObject(c, buffer); // checking null inside
+        writeObject(c, buffer, newConfiguration()); // checking null inside
 
         return buffer.toString();
     }
@@ -151,7 +185,7 @@ public class JsonOutput {
      */
     public static String toJson(UUID uuid) {
         CharBuf buffer = CharBuf.create(64);
-        writeObject(uuid, buffer); // checking null inside
+        writeObject(uuid, buffer, newConfiguration()); // checking null inside
 
         return buffer.toString();
     }
@@ -161,7 +195,7 @@ public class JsonOutput {
      */
     public static String toJson(URL url) {
         CharBuf buffer = CharBuf.create(64);
-        writeObject(url, buffer); // checking null inside
+        writeObject(url, buffer, newConfiguration()); // checking null inside
 
         return buffer.toString();
     }
@@ -175,7 +209,7 @@ public class JsonOutput {
         }
 
         CharBuf buffer = CharBuf.create(255);
-        writeMap(JsonDelegate.cloneDelegateAndGetContent(closure), buffer);
+        writeMap(JsonDelegate.cloneDelegateAndGetContent(closure), buffer, newConfiguration());
 
         return buffer.toString();
     }
@@ -184,12 +218,21 @@ public class JsonOutput {
      * @return an object representation of an Expando
      */
     public static String toJson(Expando expando) {
+        return toJson(expando, Collections.<String, Object>emptyMap());
+    }
+
+    /**
+     * @return an object representation of an Expando. <tt>configuration</tt> may define additional settings (see {@link JsonOutput}).
+     */
+    public static String toJson(Expando expando, Map<String, Object> configuration) {
         if (expando == null) {
             return NULL_VALUE;
         }
 
+        JsonOutputConfiguration jsonOutputConfiguration = newConfiguration(configuration);
+
         CharBuf buffer = CharBuf.create(255);
-        writeMap(expando.getProperties(), buffer);
+        writeMap(filterProperties(expando, expando.getProperties(), jsonOutputConfiguration), buffer, jsonOutputConfiguration);
 
         return buffer.toString();
     }
@@ -199,8 +242,16 @@ public class JsonOutput {
      * or representation for other object.
      */
     public static String toJson(Object object) {
+        return toJson(object, Collections.<String, Object>emptyMap());
+    }
+
+    /**
+     * @return "null" for a null value, or a JSON array representation for a collection, array, iterator or enumeration,
+     * or representation for other object. <tt>configuration</tt> may define additional settings (see {@link JsonOutput}).
+     */
+    public static String toJson(Object object, Map<String, Object> configuration) {
         CharBuf buffer = CharBuf.create(255);
-        writeObject(object, buffer); // checking null inside
+        writeObject(object, buffer, newConfiguration(configuration)); // checking null inside
 
         return buffer.toString();
     }
@@ -209,12 +260,19 @@ public class JsonOutput {
      * @return a JSON object representation for a map
      */
     public static String toJson(Map m) {
+        return toJson(m, Collections.<String, Object>emptyMap());
+    }
+
+    /**
+     * @return a JSON object representation for a map. <tt>configuration</tt> may define additional settings (see {@link JsonOutput}).
+     */
+    public static String toJson(Map m, Map<String, Object> configuration) {
         if (m == null) {
             return NULL_VALUE;
         }
 
         CharBuf buffer = CharBuf.create(255);
-        writeMap(m, buffer);
+        writeMap(m, buffer, newConfiguration(configuration));
 
         return buffer.toString();
     }
@@ -263,7 +321,7 @@ public class JsonOutput {
     /**
      * Serializes object and writes it into specified buffer.
      */
-    private static void writeObject(Object object, CharBuf buffer) {
+    private static void writeObject(final Object object, final CharBuf buffer, final JsonOutputConfiguration jsonOutputConfiguration) {
         if (object == null) {
             buffer.addNull();
         } else {
@@ -280,11 +338,11 @@ public class JsonOutput {
             } else if (Calendar.class.isAssignableFrom(objectClass)) {
                 writeDate(((Calendar) object).getTime(), buffer);
             } else if (Map.class.isAssignableFrom(objectClass)) {
-                writeMap((Map) object, buffer);
+                writeMap((Map) object, buffer, jsonOutputConfiguration);
             } else if (Iterable.class.isAssignableFrom(objectClass)) {
-                writeIterator(((Iterable<?>) object).iterator(), buffer);
+                writeIterator(((Iterable<?>) object).iterator(), buffer, jsonOutputConfiguration);
             } else if (Iterator.class.isAssignableFrom(objectClass)) {
-                writeIterator((Iterator) object, buffer);
+                writeIterator((Iterator) object, buffer, jsonOutputConfiguration);
             } else if (objectClass == Character.class) {
                 buffer.addJsonEscapedString(Chr.array((Character) object));
             } else if (objectClass == URL.class) {
@@ -294,18 +352,18 @@ public class JsonOutput {
             } else if (objectClass == JsonUnescaped.class) {
                 buffer.add(object.toString());
             } else if (Closure.class.isAssignableFrom(objectClass)) {
-                writeMap(JsonDelegate.cloneDelegateAndGetContent((Closure<?>) object), buffer);
+                writeMap(filterProperties(object, JsonDelegate.cloneDelegateAndGetContent((Closure<?>) object), jsonOutputConfiguration), buffer, jsonOutputConfiguration);
             } else if (Expando.class.isAssignableFrom(objectClass)) {
-                writeMap(((Expando) object).getProperties(), buffer);
+                writeMap(filterProperties(object, ((Expando) object).getProperties(), jsonOutputConfiguration), buffer, jsonOutputConfiguration);
             } else if (Enumeration.class.isAssignableFrom(objectClass)) {
                 List<?> list = Collections.list((Enumeration<?>) object);
-                writeIterator(list.iterator(), buffer);
+                writeIterator(list.iterator(), buffer, jsonOutputConfiguration);
             } else if (objectClass.isArray()) {
-                writeArray(objectClass, object, buffer);
+                writeArray(objectClass, object, buffer, jsonOutputConfiguration);
             } else if (Enum.class.isAssignableFrom(objectClass)) {
                 buffer.addQuoted(((Enum<?>) object).name());
             }else if (File.class.isAssignableFrom(objectClass)){
-                Map<?, ?> properties = getObjectProperties(object);
+                Map<String, ?> properties = DefaultGroovyMethods.getProperties(object);
                 //Clean up all recursive references to File objects
                 Iterator<? extends Map.Entry<?, ?>> iterator = properties.entrySet().iterator();
                 while(iterator.hasNext()){
@@ -315,22 +373,12 @@ public class JsonOutput {
                     }
                 }
 
-                writeMap(properties, buffer);
+                writeMap(filterProperties(object, properties, jsonOutputConfiguration), buffer, jsonOutputConfiguration);
             } else {
-                Map<?, ?> properties = getObjectProperties(object);
-                writeMap(properties, buffer);
+                writeMap(filterProperties(object, DefaultGroovyMethods.getProperties(object), jsonOutputConfiguration), buffer, jsonOutputConfiguration);
             }
         }
     }
-
-    private static Map<?, ?> getObjectProperties(Object object) {
-        Map<?, ?> properties = DefaultGroovyMethods.getProperties(object);
-        properties.remove("class");
-        properties.remove("declaringClass");
-        properties.remove("metaClass");
-        return properties;
-    }
-
 
     /**
      * Serializes any char sequence and writes it into specified buffer.
@@ -355,15 +403,15 @@ public class JsonOutput {
     /**
      * Serializes array and writes it into specified buffer.
      */
-    private static void writeArray(Class<?> arrayClass, Object array, CharBuf buffer) {
+    private static void writeArray(Class<?> arrayClass, Object array, CharBuf buffer, JsonOutputConfiguration jsonOutputConfiguration) {
         buffer.addChar(OPEN_BRACKET);
         if (Object[].class.isAssignableFrom(arrayClass)) {
             Object[] objArray = (Object[]) array;
             if (objArray.length > 0) {
-                writeObject(objArray[0], buffer);
+                writeObject(objArray[0], buffer, jsonOutputConfiguration);
                 for (int i = 1; i < objArray.length; i++) {
                     buffer.addChar(COMMA);
-                    writeObject(objArray[i], buffer);
+                    writeObject(objArray[i], buffer, jsonOutputConfiguration);
                 }
             }
         } else if (int[].class.isAssignableFrom(arrayClass)) {
@@ -439,7 +487,7 @@ public class JsonOutput {
     /**
      * Serializes map and writes it into specified buffer.
      */
-    private static void writeMap(Map<?, ?> map, CharBuf buffer) {
+    private static void writeMap(Map<?, ?> map, CharBuf buffer, JsonOutputConfiguration jsonOutputConfiguration) {
         if (!map.isEmpty()) {
             buffer.addChar(OPEN_BRACE);
             boolean firstItem = true;
@@ -455,7 +503,7 @@ public class JsonOutput {
                 }
 
                 buffer.addJsonFieldName(entry.getKey().toString());
-                writeObject(entry.getValue(), buffer);
+                writeObject(entry.getValue(), buffer, jsonOutputConfiguration);
             }
             buffer.addChar(CLOSE_BRACE);
         } else {
@@ -468,15 +516,15 @@ public class JsonOutput {
     /**
      * Serializes iterator and writes it into specified buffer.
      */
-    private static void writeIterator(Iterator<?> iterator, CharBuf buffer) {
+    private static void writeIterator(Iterator<?> iterator, CharBuf buffer, JsonOutputConfiguration jsonOutputConfiguration) {
         if (iterator.hasNext()) {
             buffer.addChar(OPEN_BRACKET);
             Object it = iterator.next();
-            writeObject(it, buffer);
+            writeObject(it, buffer, jsonOutputConfiguration);
             while (iterator.hasNext()) {
                 it = iterator.next();
                 buffer.addChar(COMMA);
-                writeObject(it, buffer);
+                writeObject(it, buffer, jsonOutputConfiguration);
             }
             buffer.addChar(CLOSE_BRACKET);
         } else {
@@ -553,6 +601,29 @@ public class JsonOutput {
         }
 
         return output.toString();
+    }
+
+    private static Map<?, ?> filterProperties(final Object obj, final Map<?, ?> properties, final JsonOutputConfiguration configuration) {
+        final Map<?, ?> filteredProperties = new LinkedHashMap<Object, Object>(properties);
+
+        for (Iterator<? extends Map.Entry<?, ?>> iterator = filteredProperties.entrySet().iterator(); iterator.hasNext();) {
+            Map.Entry<?, ?> entry = iterator.next();
+
+            // in case of maps, key could be of an other type
+            if (entry.getKey() instanceof String) {
+                boolean removed = false;
+                if (!configuration.getExcludes().isEmpty() && configuration.getExcludes().hasPropertyName(obj, (String) entry.getKey())) {
+                    iterator.remove();
+                    removed = true;
+                }
+
+                if (!removed && !configuration.getIncludes().isEmpty() && !configuration.getIncludes().hasPropertyName(obj, (String) entry.getKey())) {
+                    iterator.remove();
+                }
+            }
+        }
+
+        return filteredProperties;
     }
 
     /**
